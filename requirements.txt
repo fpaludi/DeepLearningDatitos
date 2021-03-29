@@ -1,0 +1,12 @@
+jupyter==1.0.0
+matplotlib==3.3.3
+seaborn==0.11.1
+numpy==1.19.4
+pandas==1.2.1
+tensorboard==2.4.0
+protobuf==3.14.0
+pytorch-lightning==1.2.5
+#torchtext==0.6  # Fix incompatibility
+pycocotools==2.0.2
+albumentations==0.5.2
+jupyterthemes
