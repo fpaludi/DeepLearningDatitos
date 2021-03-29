@@ -1,12 +1,11 @@
 from typing import Optional, Tuple
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd
+from copy import deepcopy
 import torch
 from torch.nn import functional as F
 from torch import nn
 from torch.optim import Adam, SGD
 from torch.tensor import Tensor
+from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader, random_split
 from torch.utils.data.dataset import Dataset
 import torchvision
@@ -16,7 +15,7 @@ from pytorch_lightning import LightningModule
 from pytorch_lightning import LightningDataModule
 from pytorch_lightning.callbacks import ModelCheckpoint, GPUStatsMonitor
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-
+from plot_utils import plot_confusion_matrix, plot_grad_flow
 
 class Network(LightningModule):
     def __init__(self, n_inputs: int, n_outputs: int):
@@ -47,11 +46,25 @@ class Network(LightningModule):
     def forward(self, x: Tensor) -> Tensor:
         return  self.net(x)
 
+    def optimizer_zero_grad(
+        self, epoch: int, batch_idx: int, optimizer: Optimizer, optimizer_idx: int
+    ):
+        last_batch = batch_idx == len(self.trainer.train_dataloader) - 1
+        if last_batch:
+            tensorboard = self.logger.experiment
+            fig = plot_grad_flow(self.named_parameters())
+            tensorboard.add_figure(
+                "Gradient Flow",
+                fig,
+                self.current_epoch
+            )
+        optimizer.zero_grad()
+
     def configure_optimizers(self):
         # return Adam(self.parameters(), lr=1e-3)
         return SGD(self.parameters(), lr=0.1)
 
-    def training_step(self, batch: Tensor, batch_idx: int) -> Tensor:
+    def training_step(self, batch: Tensor, batch_idx: int):
         x, y = batch
         logits = self(x)
         loss = F.nll_loss(logits, y)
@@ -64,23 +77,16 @@ class Network(LightningModule):
         # optimizer.zero_grad()
         return loss
 
-    def training_epoch_end(self, tensors):
-        items = super().get_progress_bar_dict()
-        print(f"\n{items}\n")
+    def training_epoch_end(self, training_step_outputs):
         tensorboard = self.logger.experiment
-        # tensorboard.add_image()
         for name, param in self.named_parameters():
-            if 'bn' not in name:
+            if 'bn' not in name and 'bias' not in name:
                 tensorboard.add_histogram(
                     f"Layer {name}",
                     param,
                     self.current_epoch
                 )
-                tensorboard.add_histogram(
-                    f"Gradient {name}",
-                    param.grad,
-                    self.current_epoch
-                )
+
         # tensorboard.add_figure(...)
 
     def validation_step(self, batch, batch_idx):
@@ -93,32 +99,10 @@ class Network(LightningModule):
         return {"loss": loss, "preds": y_hat, "target": y}
 
     def validation_epoch_end(self, outputs):
-        N_CLASSES = 10
-        tensorboard = self.logger.experiment
-
         preds = torch.cat([tmp['preds'] for tmp in outputs])
         targets = torch.cat([tmp['target'] for tmp in outputs])
-        confusion_matrix = pl.metrics.functional.confusion_matrix(
-            preds,
-            targets,
-            num_classes=N_CLASSES,
-            normalize="true",
-        )
-        df_cm = pd.DataFrame(
-            confusion_matrix.numpy(),
-            index=range(N_CLASSES),
-            columns=range(N_CLASSES)
-        )
-        plt.figure(figsize = (10,7))
-        fig = sns.heatmap(
-            df_cm,
-            annot=True,
-            cmap='Blues',
-        ).set(
-            xlabel="Predictions",
-            ylabel="Targets"
-        ).get_figure()
-        plt.close(fig)
+        fig = plot_confusion_matrix(preds, targets, n_classes=10)
+        tensorboard = self.logger.experiment
         tensorboard.add_figure(
             "Confusion matrix",
             fig,
